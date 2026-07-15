@@ -419,7 +419,7 @@
 
     // Mic permission and voice engine were already confirmed during preflight,
     // so we go straight to the greeting with no extra waiting.
-    const greeting = timeGreeting() + " ";
+    const greeting = timeGreeting() + " Please verify. Say the security phrase.";
     speak(greeting, async () => {
       await attemptVerification(1);
     });
@@ -497,7 +497,14 @@
     if (said.includes('open')){
       const site = findSiteInText(said);
       if (site){
-        openWindows[site] = window.open(SITE_MAP[site], '_blank');
+        const win = window.open(SITE_MAP[site], '_blank');
+        if (!win){
+          // window.open returned null - the browser's popup blocker stopped it.
+          openWindows[site] = null;
+          speak(`I couldn't open ${site}. Your browser blocked the pop-up. Please allow pop-ups for this site.`);
+          return true;
+        }
+        openWindows[site] = win;
         speak(`Opening ${site}.`);
         return true;
       }
