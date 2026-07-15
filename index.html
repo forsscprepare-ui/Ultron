@@ -552,6 +552,10 @@
     commandLoopActive = true;
     recognizer.continuous = true; // switch to continuous mode now that
                                     // verification (one-shot mode) is done
+    recognizer.interimResults = true; // needed so multi-word phrases like
+                                       // "open github" aren't split into
+                                       // separate final results by a mid-
+                                       // sentence pause
     attachCommandListeners();
     startRecognizerSafely();
   }
@@ -579,18 +583,35 @@
   // recognizer stay in continuous mode. It only restarts when the browser
   // itself ends the session (silence timeout, network hiccup, etc), and
   // even then with a short debounce so restarts can't happen back-to-back.
-  function attachCommandListeners(){
-    recognizer.onresult = (e) => {
-      // continuous mode delivers a growing results list; only react to
-      // the newest final result.
-      const lastResult = e.results[e.results.length - 1];
-      if (!lastResult.isFinal) return;
-      const said = lastResult[0].transcript.trim().toLowerCase();
+  let lastProcessedResultIndex = 0;
 
-      const handled = handleCommand(said);
-      setLabel('READY');
-      if (!handled){
-        setCaption(`Heard: "${said}" — no matching command.`);
+  function attachCommandListeners(){
+    lastProcessedResultIndex = 0;
+
+    recognizer.onresult = (e) => {
+      // Merge every final chunk from this utterance turn together, so a
+      // natural pause between words (e.g. "open" ... "github") doesn't get
+      // split into two separate commands. We only act once the browser
+      // marks the last chunk in this turn as final.
+      let combined = '';
+      let allFinal = true;
+
+      for (let i = lastProcessedResultIndex; i < e.results.length; i++){
+        combined += e.results[i][0].transcript + ' ';
+        if (!e.results[i].isFinal) allFinal = false;
+      }
+
+      if (!allFinal) return; // still speaking, wait for the full phrase
+
+      const said = combined.trim().toLowerCase();
+      lastProcessedResultIndex = e.results.length;
+
+      if (said){
+        const handled = handleCommand(said);
+        setLabel('READY');
+        if (!handled){
+          setCaption(`Heard: "${said}" — no matching command.`);
+        }
       }
     };
 
@@ -606,6 +627,7 @@
       // Browser ended the session on its own. Debounce the restart so we
       // never hammer start()/stop() in a tight loop.
       if (!commandLoopActive) return;
+      lastProcessedResultIndex = 0; // fresh session -> fresh results array
       if (restartTimer) clearTimeout(restartTimer);
       restartTimer = setTimeout(() => {
         startRecognizerSafely();
