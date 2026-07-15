@@ -352,7 +352,10 @@
     rec.lang = 'en-US';
     rec.interimResults = false;
     rec.maxAlternatives = 1;
-    rec.continuous = false;
+    rec.continuous = true; // stay open across multiple utterances instead of
+                            // restarting start()/stop() every few seconds,
+                            // which is what triggers Chrome's "Page Unresponsive"
+                            // watchdog during long always-listening sessions.
     return rec;
   }
 
@@ -542,32 +545,70 @@
   }
 
   let commandLoopActive = false;
+  let restartTimer = null;
 
-  async function startCommandLoop(){
+  function startCommandLoop(){
     if (commandLoopActive) return; // avoid double loops
     commandLoopActive = true;
-    runCommandLoop();
+    attachCommandListeners();
+    startRecognizerSafely();
   }
 
-  async function runCommandLoop(){
-    while (commandLoopActive){
-      const said = await listenOnce(null); // no timeout - listens continuously
-      if (!said){
-        // no-speech / recognition hiccup - just keep listening
-        continue;
-      }
+  function stopCommandLoop(){
+    commandLoopActive = false;
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    try { recognizer.stop(); } catch(e){}
+  }
+
+  function startRecognizerSafely(){
+    if (!commandLoopActive) return;
+    try {
+      recognizer.start();
+      setState('listening');
+      setLabel('LISTENING');
+    } catch (e) {
+      // already running - ignore, it's fine
+    }
+  }
+
+  // Instead of restarting the recognizer after every single utterance
+  // (which is what triggered Chrome's "Page Unresponsive" warning during
+  // long sessions), we attach the event handlers ONCE and let the
+  // recognizer stay in continuous mode. It only restarts when the browser
+  // itself ends the session (silence timeout, network hiccup, etc), and
+  // even then with a short debounce so restarts can't happen back-to-back.
+  function attachCommandListeners(){
+    recognizer.onresult = (e) => {
+      // continuous mode delivers a growing results list; only react to
+      // the newest final result.
+      const lastResult = e.results[e.results.length - 1];
+      if (!lastResult.isFinal) return;
+      const said = lastResult[0].transcript.trim().toLowerCase();
 
       const handled = handleCommand(said);
+      setLabel('READY');
       if (!handled){
-        setLabel('READY');
         setCaption(`Heard: "${said}" — no matching command.`);
-      } else {
-        setLabel('READY');
       }
+    };
 
-      // brief pause so recognizer resets cleanly before listening again
-      await new Promise(r => setTimeout(r, 400));
-    }
+    recognizer.onerror = (e) => {
+      // 'no-speech' happens constantly in continuous mode while waiting
+      // for you to talk - that's normal, not an error worth logging.
+      if (e.error !== 'no-speech'){
+        console.warn('Recognition error:', e.error);
+      }
+    };
+
+    recognizer.onend = () => {
+      // Browser ended the session on its own. Debounce the restart so we
+      // never hammer start()/stop() in a tight loop.
+      if (!commandLoopActive) return;
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        startRecognizerSafely();
+      }, 600);
+    };
   }
 
   tapVeil.addEventListener('click', () => {
