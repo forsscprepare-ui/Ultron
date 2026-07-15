@@ -352,10 +352,10 @@
     rec.lang = 'en-US';
     rec.interimResults = false;
     rec.maxAlternatives = 1;
-    rec.continuous = true; // stay open across multiple utterances instead of
-                            // restarting start()/stop() every few seconds,
-                            // which is what triggers Chrome's "Page Unresponsive"
-                            // watchdog during long always-listening sessions.
+    rec.continuous = false; // one-shot mode - matches the original working
+                             // verification behavior. The always-listening
+                             // command loop switches this to true separately
+                             // once verification succeeds.
     return rec;
   }
 
@@ -550,6 +550,8 @@
   function startCommandLoop(){
     if (commandLoopActive) return; // avoid double loops
     commandLoopActive = true;
+    recognizer.continuous = true; // switch to continuous mode now that
+                                    // verification (one-shot mode) is done
     attachCommandListeners();
     startRecognizerSafely();
   }
