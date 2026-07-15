@@ -188,6 +188,17 @@
     letter-spacing:2px;
     color: var(--core);
     animation: breathe 3s ease-in-out infinite;
+    transition: opacity 0.3s ease, border-color 0.3s ease;
+  }
+  .tap-veil.loading .go{
+    opacity: 0.35;
+    animation: none;
+    cursor: not-allowed;
+  }
+  .tap-veil.ready .go{
+    opacity: 1;
+    border-color: rgba(255,46,46,0.9);
+    cursor: pointer;
   }
   .tap-veil p{
     color: var(--text-dim);
@@ -199,8 +210,8 @@
 <body>
 
   <div class="tap-veil" id="tapVeil">
-    <div class="go">ENGAGE</div>
-    <p>TAP TO INITIALIZE</p>
+    <div class="go" id="goBtn">···</div>
+    <p id="veilStatus">LOADING SYSTEM…</p>
   </div>
 
   <div class="brand">U L T R O N</div>
@@ -241,26 +252,47 @@
     caption.textContent = text;
   }
 
-  // Pick the most natural-sounding voice available
+  // Pick the most natural-sounding voice available.
+  // On ChromeOS, "Google US English" / "Google UK English Female" etc. are
+  // network-backed voices and sound noticeably better than local/offline ones.
   let chosenVoice = null;
+  let voicesReady = false;
+
+  function scoreVoice(v){
+    let score = 0;
+    if (/Google/i.test(v.name)) score += 50;          // ChromeOS network voices
+    if (/Natural|Neural|Online/i.test(v.name)) score += 40;
+    if (/en-US/i.test(v.lang)) score += 15;
+    if (/en-GB/i.test(v.lang)) score += 10;
+    if (/en-IN/i.test(v.lang)) score += 8;
+    if (/^en/i.test(v.lang)) score += 5;
+    if (v.localService === false) score += 10;         // network voices > local
+    return score;
+  }
+
   function pickVoice(){
     const voices = synth.getVoices();
-    if (!voices.length) return;
-    const preferredNames = [
-      'Microsoft Aria Online', 'Microsoft Guy Online', 'Microsoft Ryan Online',
-      'Microsoft Sonia Online', 'Google UK English Male', 'Google UK English Female',
-      'Google US English', 'Samantha', 'Daniel', 'Alex', 'Karen', 'Moira'
-    ];
-    chosenVoice =
-      voices.find(v => preferredNames.some(name => v.name.includes(name))) ||
-      voices.find(v => /en-GB|en-US/i.test(v.lang) && /Online|Natural|Neural/i.test(v.name)) ||
-      voices.find(v => /en-GB|en-US|en-IN/i.test(v.lang)) ||
-      voices.find(v => /^en/i.test(v.lang)) ||
-      voices[0];
+    if (!voices.length) return false;
+    chosenVoice = voices.slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0];
+    voicesReady = true;
+    return true;
   }
   if (synth) {
     synth.onvoiceschanged = pickVoice;
     pickVoice();
+  }
+
+  function waitForVoices(timeoutMs){
+    return new Promise((resolve) => {
+      if (voicesReady && chosenVoice) { resolve(true); return; }
+      const start = Date.now();
+      const check = setInterval(() => {
+        if (pickVoice() || Date.now() - start > timeoutMs){
+          clearInterval(check);
+          resolve(true);
+        }
+      }, 100);
+    });
   }
 
   function speak(text, onEnd){
@@ -376,7 +408,8 @@
 
     setState('granted');
     setLabel('PERMISSIONS OK');
-    await new Promise(r => setTimeout(r, 600));
+    await waitForVoices(2000);
+    await new Promise(r => setTimeout(r, 400));
 
     // Time-based greeting + ask for passphrase
     const greeting = timeGreeting() + " Please verify. Say the security phrase.";
@@ -425,9 +458,37 @@
   }
 
   tapVeil.addEventListener('click', () => {
+    if (!tapVeil.classList.contains('ready')) return; // ignore taps while still loading
     tapVeil.style.display = 'none';
     bootSequence();
-  }, { once: true });
+  }, { once: false });
+
+  // ---- Pre-flight readiness check ----
+  // Runs before the ENGAGE button is enabled. Confirms:
+  //  1. SpeechRecognition is supported by this browser
+  //  2. SpeechSynthesis voices have loaded (so the first line spoken
+  //     doesn't fall back to a default robotic voice while voices load)
+  async function preflight(){
+    const veilStatus = document.getElementById('veilStatus');
+    const goBtn = document.getElementById('goBtn');
+    tapVeil.classList.add('loading');
+
+    if (!SpeechRecognition) {
+      veilStatus.textContent = 'SPEECH RECOGNITION NOT SUPPORTED IN THIS BROWSER';
+      goBtn.textContent = '✕';
+      return;
+    }
+
+    veilStatus.textContent = 'LOADING VOICE ENGINE…';
+    await waitForVoices(4000);
+
+    veilStatus.textContent = 'TAP TO INITIALIZE';
+    goBtn.textContent = 'ENGAGE';
+    tapVeil.classList.remove('loading');
+    tapVeil.classList.add('ready');
+  }
+
+  preflight();
 
 })();
 </script>
