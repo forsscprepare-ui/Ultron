@@ -238,6 +238,14 @@
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const synth = window.speechSynthesis;
 
+  // ---- ElevenLabs config ----
+  // Paste your own API key and voice ID below. Get them from:
+  // https://elevenlabs.io/app/settings/api-keys  (API key)
+  // https://elevenlabs.io/app/voice-lab           (voice ID, click your saved "Rahul" voice)
+  const ELEVEN_API_KEY = "sk_be59eed891e876f66a7b771218f38932ce7908c6dfbb2e46";
+  const ELEVEN_VOICE_ID = "KwIgPiOpugJRCqPjgUbK";
+  const ELEVEN_MODEL_ID = "eleven_multilingual_v2"; // good quality, supports Indian accents well
+
   const PASSPHRASE = "get up ultron";
 
   function setState(name){
@@ -295,8 +303,7 @@
     });
   }
 
-  function speak(text, onEnd){
-    setCaption(text);
+  function speakWithBrowser(text, onEnd){
     if (!synth) { if (onEnd) onEnd(); return; }
     synth.cancel();
     const utter = new SpeechSynthesisUtterance(text);
@@ -306,10 +313,69 @@
     utter.volume = 1.0;
     setState('speaking');
     utter.onstart = () => setState('speaking');
-    utter.onend = () => {
-      if (onEnd) onEnd();
-    };
+    utter.onend = () => { if (onEnd) onEnd(); };
     synth.speak(utter);
+  }
+
+  let currentAudio = null;
+
+  async function speak(text, onEnd){
+    setCaption(text);
+
+    const hasKey = ELEVEN_API_KEY && !ELEVEN_API_KEY.startsWith('PASTE_')
+                && ELEVEN_VOICE_ID && !ELEVEN_VOICE_ID.startsWith('PASTE_');
+
+    if (!hasKey) {
+      // No key configured yet - fall back to the browser voice so the app
+      // still works while you're setting up ElevenLabs.
+      speakWithBrowser(text, onEnd);
+      return;
+    }
+
+    try {
+      setState('speaking');
+      const resp = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'xi-api-key': ELEVEN_API_KEY
+          },
+          body: JSON.stringify({
+            text: text,
+            model_id: ELEVEN_MODEL_ID,
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75,
+              style: 0.3,
+              use_speaker_boost: true
+            }
+          })
+        }
+      );
+
+      if (!resp.ok) throw new Error('ElevenLabs request failed: ' + resp.status);
+
+      const audioBlob = await resp.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      currentAudio = new Audio(audioUrl);
+      currentAudio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (onEnd) onEnd();
+      };
+      currentAudio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (onEnd) onEnd();
+      };
+      await currentAudio.play();
+
+    } catch (err) {
+      console.error('ElevenLabs TTS failed, falling back to browser voice:', err);
+      speakWithBrowser(text, onEnd);
+    }
   }
 
   function timeGreeting(){
