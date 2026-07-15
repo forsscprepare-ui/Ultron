@@ -558,10 +558,18 @@
 
   frameCloseBtn.addEventListener('click', closeSiteFrame);
 
+  // Common ways Chrome's speech recognizer mishears "GitHub" - "guitar",
+  // "get hub", "get tub" etc. are frequent near-sound misfires.
+  const GITHUB_VARIANTS = ['github', 'git hub', 'get hub', 'guitar', 'get tub', 'git tub'];
+
+  function mentionsGithub(text){
+    return GITHUB_VARIANTS.some(variant => text.includes(variant));
+  }
+
   function handleCommand(said){
     if (!said) return false;
 
-    if (said.includes('open') && said.includes('github')){
+    if (said.includes('open') && mentionsGithub(said)){
       openSiteInFrame('github', 'https://www.github.com');
       speak('Opening GitHub.');
       return true;
