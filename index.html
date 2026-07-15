@@ -474,17 +474,20 @@
     github: 'https://www.github.com'
   };
 
-  // Tracks the most recently opened window reference and which site it is,
-  // so "close" knows what to close. Browsers only allow JS to close a
-  // window/tab that this page itself opened via window.open().
-  let openedWindow = null;
-  let openedSiteName = null;
+  // Tracks each opened window by site name, e.g. { youtube: windowRef }.
+  // This lets multiple sites stay open at once, and "close <site>" always
+  // closes the specific one named rather than guessing.
+  const openWindows = {};
 
   function findSiteInText(text){
     for (const key in SITE_MAP){
       if (text.includes(key)) return key;
     }
     return null;
+  }
+
+  function listOpenSiteNames(){
+    return Object.keys(openWindows).filter(name => openWindows[name] && !openWindows[name].closed);
   }
 
   function handleCommand(said){
@@ -494,23 +497,36 @@
     if (said.includes('open')){
       const site = findSiteInText(said);
       if (site){
-        openedWindow = window.open(SITE_MAP[site], '_blank');
-        openedSiteName = site;
+        openWindows[site] = window.open(SITE_MAP[site], '_blank');
         speak(`Opening ${site}.`);
         return true;
       }
+      speak("I didn't catch which site to open. Please say the site name.");
+      return true;
     }
 
-    // "close" / "close it" / "close <site>"
+    // "close <site>" — the site name is required so it's always clear
+    // which window to close.
     if (said.includes('close')){
-      if (openedWindow && !openedWindow.closed){
-        const nameToReport = openedSiteName || 'it';
-        openedWindow.close();
-        speak(`Closing ${nameToReport}.`);
-        openedWindow = null;
-        openedSiteName = null;
+      const site = findSiteInText(said);
+
+      if (!site){
+        const open = listOpenSiteNames();
+        if (open.length === 0){
+          speak("Nothing is open right now.");
+        } else {
+          speak(`Please tell me which one to close. Open right now: ${open.join(', ')}.`);
+        }
+        return true;
+      }
+
+      const win = openWindows[site];
+      if (win && !win.closed){
+        win.close();
+        openWindows[site] = null;
+        speak(`Closing ${site}.`);
       } else {
-        speak("There's nothing open for me to close.");
+        speak(`${site} isn't open right now.`);
       }
       return true;
     }
