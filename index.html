@@ -224,9 +224,75 @@
     opacity: 0;
     transition: opacity 0.4s ease;
   }
+
+  /* ---- Iframe modal (in-page popup for opened sites) ---- */
+  .frame-modal{
+    position: fixed;
+    inset: 0;
+    background: rgba(5,6,10,0.85);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 24px;
+  }
+  .frame-modal.open{
+    display: flex;
+  }
+  .frame-window{
+    width: min(1000px, 100%);
+    height: min(700px, 90vh);
+    background: var(--panel);
+    border: 1px solid rgba(255,46,46,0.4);
+    border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .frame-titlebar{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #0d1018;
+    border-bottom: 1px solid rgba(255,46,46,0.25);
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+  }
+  .frame-titlebar .frame-close{
+    cursor: pointer;
+    color: var(--core);
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 8px;
+    border-radius: 4px;
+    transition: background 0.15s ease;
+  }
+  .frame-titlebar .frame-close:hover{
+    background: rgba(255,46,46,0.15);
+  }
+  .frame-window iframe{
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: #fff;
+  }
 </style>
 </head>
 <body>
+
+  <div class="frame-modal" id="frameModal">
+    <div class="frame-window">
+      <div class="frame-titlebar">
+        <span id="frameTitle">GITHUB</span>
+        <span class="frame-close" id="frameCloseBtn">✕</span>
+      </div>
+      <iframe id="siteFrame" src="about:blank"></iframe>
+    </div>
+  </div>
 
   <div class="tap-veil" id="tapVeil">
     <div class="go" id="goBtn">···</div>
@@ -448,7 +514,7 @@
       speak("Okay. Let's start.", () => {
         setState('idle');
         setLabel('READY');
-        setCaption('System ready. Say a command — for example, open YouTube.');
+        setCaption('System ready. Say "open GitHub" to begin.');
         startCommandLoop();
       });
       return;
@@ -468,75 +534,45 @@
     });
   }
 
-  // ---- Command engine: open/close sites by voice ----
-  // Maps spoken site names to URLs. Add more entries here to support
-  // more sites later.
-  const SITE_MAP = {
-    youtube: 'https://www.youtube.com',
-    facebook: 'https://www.facebook.com',
-    github: 'https://www.github.com'
-  };
+  // ---- Command engine: open GitHub in an in-page iframe ----
+  // Scoped to GitHub only for now. More sites/features get added here later.
+  const frameModal = document.getElementById('frameModal');
+  const siteFrame = document.getElementById('siteFrame');
+  const frameTitle = document.getElementById('frameTitle');
+  const frameCloseBtn = document.getElementById('frameCloseBtn');
 
-  // Tracks each opened window by site name, e.g. { youtube: windowRef }.
-  // This lets multiple sites stay open at once, and "close <site>" always
-  // closes the specific one named rather than guessing.
-  const openWindows = {};
+  let frameOpenSite = null; // tracks which site is currently shown, e.g. 'github'
 
-  function findSiteInText(text){
-    for (const key in SITE_MAP){
-      if (text.includes(key)) return key;
-    }
-    return null;
+  function openSiteInFrame(name, url){
+    siteFrame.src = url;
+    frameTitle.textContent = name.toUpperCase();
+    frameModal.classList.add('open');
+    frameOpenSite = name;
   }
 
-  function listOpenSiteNames(){
-    return Object.keys(openWindows).filter(name => openWindows[name] && !openWindows[name].closed);
+  function closeSiteFrame(){
+    frameModal.classList.remove('open');
+    siteFrame.src = 'about:blank';
+    frameOpenSite = null;
   }
+
+  frameCloseBtn.addEventListener('click', closeSiteFrame);
 
   function handleCommand(said){
     if (!said) return false;
 
-    // "open <site>"
-    if (said.includes('open')){
-      const site = findSiteInText(said);
-      if (site){
-        const win = window.open(SITE_MAP[site], '_blank');
-        if (!win){
-          // window.open returned null - the browser's popup blocker stopped it.
-          openWindows[site] = null;
-          speak(`I couldn't open ${site}. Your browser blocked the pop-up. Please allow pop-ups for this site.`);
-          return true;
-        }
-        openWindows[site] = win;
-        speak(`Opening ${site}.`);
-        return true;
-      }
-      speak("I didn't catch which site to open. Please say the site name.");
+    if (said.includes('open') && said.includes('github')){
+      openSiteInFrame('github', 'https://www.github.com');
+      speak('Opening GitHub.');
       return true;
     }
 
-    // "close <site>" — the site name is required so it's always clear
-    // which window to close.
     if (said.includes('close')){
-      const site = findSiteInText(said);
-
-      if (!site){
-        const open = listOpenSiteNames();
-        if (open.length === 0){
-          speak("Nothing is open right now.");
-        } else {
-          speak(`Please tell me which one to close. Open right now: ${open.join(', ')}.`);
-        }
-        return true;
-      }
-
-      const win = openWindows[site];
-      if (win && !win.closed){
-        win.close();
-        openWindows[site] = null;
-        speak(`Closing ${site}.`);
+      if (frameOpenSite){
+        speak(`Closing ${frameOpenSite}.`);
+        closeSiteFrame();
       } else {
-        speak(`${site} isn't open right now.`);
+        speak('Nothing is open right now.');
       }
       return true;
     }
