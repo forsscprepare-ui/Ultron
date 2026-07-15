@@ -205,6 +205,25 @@
     font-size:12px;
     letter-spacing:2px;
   }
+  .progress-track{
+    width: 200px;
+    height: 3px;
+    background: rgba(255,46,46,0.15);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .progress-fill{
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--core-dim), var(--core));
+    border-radius: 2px;
+    transition: width 0.25s ease;
+  }
+  .tap-veil.ready .progress-track{
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
 </style>
 </head>
 <body>
@@ -212,6 +231,9 @@
   <div class="tap-veil" id="tapVeil">
     <div class="go" id="goBtn">···</div>
     <p id="veilStatus">LOADING SYSTEM…</p>
+    <div class="progress-track" id="progressTrack">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
   </div>
 
   <div class="brand">U L T R O N</div>
@@ -392,24 +414,11 @@
   }
 
   async function bootSequence(){
-    setState('idle');
-    setLabel('BOOTING');
-
-    const granted = await verifyMicPermission();
-
-    if (!granted){
-      setState('denied');
-      setLabel('ACCESS DENIED');
-      speak("Microphone access is blocked. Please allow microphone permission in your browser settings, then reload.");
-      return;
-    }
-
     setState('granted');
-    setLabel('PERMISSIONS OK');
-    await waitForVoices(2000);
-    await new Promise(r => setTimeout(r, 400));
+    setLabel('READY');
 
-    // Time-based greeting + ask for passphrase
+    // Mic permission and voice engine were already confirmed during preflight,
+    // so we go straight to the greeting with no extra waiting.
     const greeting = timeGreeting() + " Please verify. Say the security phrase.";
     speak(greeting, async () => {
       await attemptVerification(1);
@@ -436,7 +445,8 @@
       speak("Okay. Let's start.", () => {
         setState('idle');
         setLabel('READY');
-        setCaption('System ready. Awaiting further instructions.');
+        setCaption('System ready. Say a command — for example, open YouTube.');
+        startCommandLoop();
       });
       return;
     }
@@ -455,6 +465,88 @@
     });
   }
 
+  // ---- Command engine: open/close sites by voice ----
+  // Maps spoken site names to URLs. Add more entries here to support
+  // more sites later.
+  const SITE_MAP = {
+    youtube: 'https://www.youtube.com',
+    facebook: 'https://www.facebook.com',
+    github: 'https://www.github.com'
+  };
+
+  // Tracks the most recently opened window reference and which site it is,
+  // so "close" knows what to close. Browsers only allow JS to close a
+  // window/tab that this page itself opened via window.open().
+  let openedWindow = null;
+  let openedSiteName = null;
+
+  function findSiteInText(text){
+    for (const key in SITE_MAP){
+      if (text.includes(key)) return key;
+    }
+    return null;
+  }
+
+  function handleCommand(said){
+    if (!said) return false;
+
+    // "open <site>"
+    if (said.includes('open')){
+      const site = findSiteInText(said);
+      if (site){
+        openedWindow = window.open(SITE_MAP[site], '_blank');
+        openedSiteName = site;
+        speak(`Opening ${site}.`);
+        return true;
+      }
+    }
+
+    // "close" / "close it" / "close <site>"
+    if (said.includes('close')){
+      if (openedWindow && !openedWindow.closed){
+        const nameToReport = openedSiteName || 'it';
+        openedWindow.close();
+        speak(`Closing ${nameToReport}.`);
+        openedWindow = null;
+        openedSiteName = null;
+      } else {
+        speak("There's nothing open for me to close.");
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  let commandLoopActive = false;
+
+  async function startCommandLoop(){
+    if (commandLoopActive) return; // avoid double loops
+    commandLoopActive = true;
+    runCommandLoop();
+  }
+
+  async function runCommandLoop(){
+    while (commandLoopActive){
+      const said = await listenOnce(null); // no timeout - listens continuously
+      if (!said){
+        // no-speech / recognition hiccup - just keep listening
+        continue;
+      }
+
+      const handled = handleCommand(said);
+      if (!handled){
+        setLabel('READY');
+        setCaption(`Heard: "${said}" — no matching command.`);
+      } else {
+        setLabel('READY');
+      }
+
+      // brief pause so recognizer resets cleanly before listening again
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+
   tapVeil.addEventListener('click', () => {
     if (!tapVeil.classList.contains('ready')) return; // ignore taps while still loading
     tapVeil.style.display = 'none';
@@ -462,23 +554,44 @@
   }, { once: false });
 
   // ---- Pre-flight readiness check ----
-  // Runs before the ENGAGE button is enabled. Confirms:
-  //  1. SpeechRecognition is supported by this browser
-  //  2. SpeechSynthesis voices have loaded (so the first line spoken
-  //     doesn't fall back to a default robotic voice while voices load)
+  // Runs before the ENGAGE button is enabled. Real progress bar tracks
+  // actual stages instead of a fake timer:
+  //  1. Confirm SpeechRecognition is supported
+  //  2. Request mic permission NOW (during loading, not after tap) so the
+  //     Allow-popup delay happens before ENGAGE is even shown as ready
+  //  3. Load voice engine
+  // Once all three are done, ENGAGE lights up and tapping it goes straight
+  // into the greeting with no further waiting.
   async function preflight(){
     const veilStatus = document.getElementById('veilStatus');
     const goBtn = document.getElementById('goBtn');
+    const progressFill = document.getElementById('progressFill');
     tapVeil.classList.add('loading');
+
+    const setProgress = (pct) => { progressFill.style.width = pct + '%'; };
 
     if (!SpeechRecognition) {
       veilStatus.textContent = 'SPEECH RECOGNITION NOT SUPPORTED IN THIS BROWSER';
       goBtn.textContent = '✕';
+      setProgress(0);
+      return;
+    }
+    setProgress(15);
+
+    veilStatus.textContent = 'REQUESTING MICROPHONE…';
+    const granted = await verifyMicPermission();
+    setProgress(65);
+
+    if (!granted){
+      veilStatus.textContent = 'MICROPHONE ACCESS DENIED — RELOAD TO RETRY';
+      goBtn.textContent = '✕';
+      setProgress(0);
       return;
     }
 
     veilStatus.textContent = 'LOADING VOICE ENGINE…';
     await waitForVoices(4000);
+    setProgress(100);
 
     veilStatus.textContent = 'TAP TO INITIALIZE';
     goBtn.textContent = 'ENGAGE';
